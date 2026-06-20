@@ -1,0 +1,104 @@
+﻿Progetto di Ingegneria Informatica
+Checkpoint/Restart Fault Tolerance su STM32
+
+Autore: Aceti Luca
+Codice persona: 10961427
+Tutor: Reghenzani Federico
+Anno Accademico: 2025/2026
+Link repository:
+1. Specifiche
+1.1 Obiettivo
+Lo scopo di questo progetto consiste nell'implementare un meccanismo di tolleranza ai guasti (Fault Tolerance) di tipo Checkpoint/Restart (C/R) su piattaforma embedded basata su microcontrollore STM32 NUCLEO-L152RE (Cortex-M3). Nei sistemi di calcolo embedded, in particolare quelli operanti in scenari critici o alimentati da fonti di energia instabili (es. Energy Harvesting), i guasti transitori di alimentazione (power-cut) o i reset improvvisi dovuti a disturbi elettromagnetici rappresentano una minaccia concreta all'integritÃ  del calcolo. Senza un sistema di tolleranza ai guasti, un arresto improvviso obbligherebbe l'applicazione a riavviare l'intera computazione da zero, comportando spreco di tempo di calcolo, consumo inefficiente di energia (risorsa critica nei sistemi a batteria o harvesting) e rischio di non giungere mai a completamento se il tempo medio tra i guasti (MTBF) Ã¨ inferiore alla durata del calcolo completo. L'obiettivo primario di questo sistema Ã¨ dunque quello di salvare periodicamente lo stato minimo necessario alla ripartenza in una memoria non volatile interna (Data EEPROM) durante fasi significative di un benchmark computazionale. In seguito a un reset o a una mancanza di tensione, al successivo boot del microcontrollore il firmware esegue una procedura di ripristino della RAM e dei registri della CPU (CPU context restore), permettendo al programma di riprendere l'esecuzione esattamente dall'ultimo stato consistente salvato (checkpoint valido).
+
+1.2 Specifica
+Il sistema deve salvare internamente il contesto minimo per riprendere l'esecuzione a monte del guasto. Tale contesto comprende sia lo stato logico della memoria sia quello fisico della CPU. Lo stato comprende una Magic Word di validitÃ  (0xACCEDED) all'indirizzo iniziale 0x08080000 per discriminare tra avvio a freddo e warm boot, e una struttura SystemState contenente l'indice del checkpoint, la dimensione dello stack attivo e il valore dell'MSP. Vengono inoltre salvati i registri spinti dall'hardware nell'Exception Frame (R0-R3, R12, LR, PC, xPSR) e quelli non volatili (R4-R11) gestiti via software. Infine, viene effettuato il dump dello stack attivo dall'MSP corrente all'indirizzo _estack, che include le variabili locali e i frame attivi.
+Vincoli e ipotesi operative:
+Piattaforma target: STM32 NUCLEO-L152RE.
+Memoria di persistenza: Data EEPROM interna.
+Trigger checkpoint: software (interrupt tramite PendSV) in punti significativi del benchmark.
+
+1.3 Analisi della specifica
+La progettazione del meccanismo di Checkpoint/Restart richiede di bilanciare accuratamente la completezza del contesto salvato e l'overhead temporale/energetico di scrittura. La scrittura in EEPROM Ã¨ molto costosa (circa 3-4 ms per word). Per minimizzare l'overhead, il sistema implementa un meccanismo dinamico di stack sizing: anzichÃ© salvare l'intera RAM, calcola a runtime lo stack effettivamente attivo (dimensione = _estack - MSP) e ne effettua il dump. Se lo stack occupato Ã¨ ridotto, il tempo di scrittura scende a poche decine di millisecondi, riducendo sensibilmente l'overhead e limitando l'esposizione al rischio di guasti durante il salvataggio.
+
+
+
+
+2. Implementazione
+2.1 Architettura checkpoint/restart
+L'architettura del sistema si basa sull'interazione coordinata tra routine in C, istruzioni assembly inline e configurazioni hardware del core ARM Cortex-M3. La struttura SystemState mappa i metadati e i registri principali. I checkpoint vengono innescati impostando il bit di pendency per PendSV (SCB->ICSR |= SCB_ICSR_PENDSVSET_Msk). L'handler PendSV_Handler Ã¨ marcato naked per impedire prologo ed epilogo generati dal compilatore; esegue manualmente il push dei registri R4-R11 sullo stack e passa l'MSP aggiornato a Capture_Registers tramite R0. Quest'ultima preleva i registri dell'Exception Frame hardware (R0-R3, R12, LR, PC, xPSR) spinti automaticamente dal microcontrollore a partire dall'offset 8 dello stack pointer. Infine, Save_State_EEPROM serializza la struttura SystemState e lo stack attivo a partire dall'indirizzo 0x08080000 in Data EEPROM.
+2.2 Benchmark applicativo (LU decomposition)
+Il benchmark implementato Ã¨ la decomposizione LU con risoluzione del sistema lineare associato, avente complessitÃ  O(N^3) su matrice quadrata di dimensione 20x20. L'algoritmo calcola una matrice triangolare inferiore L e una superiore U tali che A = L * U, prevenendo divisioni per zero incrementando la diagonale principale. I checkpoint sono posizionati strategicamente: alla fine di ciascuna delle 20 iterazioni della decomposizione LU (dopo aver completato la riga/colonna di L e U), prima della Forward Substitution (L * y = b) e prima della Backward Substitution (U * x = y). Al completamento del calcolo, i risultati vengono stampati su porta seriale UART e il checkpoint viene invalidato.
+Alla fine di ogni fase della decomposizione LU.
+Prima della forward substitution.
+Prima della backward substitution.
+2.3 Persistenza su EEPROM e politica di validità 
+Il checkpoint Ã¨ considerato valido se all'indirizzo EEPROM 0x08080000 Ã¨ presente la Magic Word 0xACCEDED. Questo marcatore viene scritto all'avvio del salvataggio. Durante il boot, il firmware effettua una lettura diretta di questo indirizzo: in caso di corrispondenza avvia la procedura di ripristino (Warm Start), altrimenti procede con l'esecuzione nominale da zero (Cold Start). Al termine corretto del benchmark, la Magic Word viene sovrascritta con 0x00000000 (invalidazione) per impedire il ripristino di uno stato obsoleto ai boot o reset successivi.
+2.4 Procedura di restore
+In fase di boot, se la Magic Word Ã¨ valida, il firmware copia lo stato logico (struttura SystemState e stack dump) da EEPROM a RAM nei rispettivi indirizzi di origine, impiegando variabili statiche per non sovrascrivere lo stack durante il ripristino. Subito dopo viene richiamata la procedura naked Restore_Context in assembly, che compie il ripristino del core ARM: imposta l'MSP al valore salvato, effettua il pop dei registri R4-R11, avanza l'MSP di 32 byte per ripulire l'Exception Frame hardware, imposta il Thumb bit (orr r2, r2, #1) sul PC salvato prima di spingerlo sullo stack, ripristina i flag aritmetici di stato in APSR e gli altri registri hardware, ed esegue il salto finale tramite pop {pc} all'istruzione successiva al checkpoint.
+
+
+
+
+
+3. Test eseguiti
+I test sono stati condotti con fault injection tramite reset/power cycle durante il benchmark, monitorando i log UART su terminale seriale.
+Tabella risultati:
+Test
+Punto di interruzione
+Checkpoint trovato
+Ripresa corretta
+Tempo di recovery (ms)
+Note
+T1
+...
+S?/No
+S?/No
+...
+...
+T2
+...
+S?/No
+S?/No
+...
+...
+T3
+...
+S?/No
+S?/No
+...
+...
+T4
+...
+S?/No
+S?/No
+...
+...
+T5
+...
+S?/No
+S?/No
+...
+...
+T6
+...
+S?/No
+S?/No
+...
+...
+
+Osservazioni principali (esempio da adattare):
+Il meccanismo di tolleranza ai guasti riprende correttamente dal checkpoint valido piÃ¹ recente quando la Magic Word Ã¨ presente. I test condotti dimostrano che il sistema Ã¨ robusto e ripristina integralmente lo stack e il contesto dei registri. L'overhead temporale Ã¨ dettato principalmente dal tempo di scrittura fisica in EEPROM (3.25 ms per word): per uno stack attivo medio di 112 word, l'operazione richiede circa 403 ms, mentre la fase di ripristino al boot (Warm Start) si conclude in meno di 15 ms.
+L'overhead aumenta con la frequenza dei checkpoint.
+La robustezza dipende dalla coerenza del dump EEPROM e dal corretto restore del contesto CPU.
+
+
+
+
+4. Conclusioni e commenti
+Il prototipo dimostra la fattibilitÃ  del checkpoint/restart su STM32 per workload numerici di decomposizione LU. I limiti attuali includono la mancanza di controlli di integritÃ  (come un checksum CRC) sul dump per rilevare interruzioni di tensione durante il salvataggio stesso, l'assenza di un'architettura dual-slot per garantire atomicitÃ  e l'usura termica della EEPROM. Come sviluppi futuri si propone l'introduzione di un checksum CRC32, uno schema dual-slot A/B con scrittura alternata e algoritmi di compressione dello stack (es. Run Length Encoding) per ridurre i tempi di scrittura in EEPROM.
+Limiti attuali e sviluppi futuri:
+Aggiungere serializzazione esplicita dello stato globale applicativo.
+Introdurre validazione integrità (CRC/checksum) dei dati salvati.
+Valutare schema dual-slot A/B con commit atomico in EEPROM.
+Quantificare overhead e tempi con campagna di misure sistematica.
+

@@ -1,0 +1,16 @@
+# Ignora le cartelle di compilazione
+Debug/
+Release/
+
+# Ignora i binari e i file oggetto
+*.o
+*.elf
+*.bin
+*.map
+*.hex
+*.list
+*.su
+
+# Ignora i file di configurazione locali dell'IDE
+.mxproject
+*.launch
