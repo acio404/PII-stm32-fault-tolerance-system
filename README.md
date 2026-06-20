@@ -20,15 +20,15 @@ The complete architectural analysis, hardware profiling, and performance benchma
 
 \## Key Features
 
-\* \*Bare-Metal Environment:\* No RTOS used. Entirely driven by hardware interrupts and raw memory manipulation.
+* \* \*Bare-Metal Environment:\* No RTOS used. Entirely driven by hardware interrupts and raw memory manipulation.
 
-\* \*Asynchronous Checkpointing:\* Triggered via software using the ARM PendSV exception.
+* \* \*Asynchronous Checkpointing:\* Triggered via software using the ARM PendSV exception.
 
-\* \*Naked Assembly Restore:\* Direct manipulation of the Main Stack Pointer (MSP) and the hardware Exception Frame (R0-R3, R12, LR,    PC, xPSR) to restore the CPU context.
+* \* \*Naked Assembly Restore:\* Direct manipulation of the Main Stack Pointer (MSP) and the hardware Exception Frame (R0-R3, R12, LR,    PC, xPSR) to restore the CPU context.
 
 * \*Dynamic Stack Dump:\* Calculates the exact stack footprint at runtime (\_estack - MSP) to avoid indiscriminate RAM dumping, minimizing EEPROM write cycles and reducing the vulnerability window.
 
-\* \*Hardware Profiling:\* Dump execution time is strictly measured at the cycle-clock level using the Cortex-M Data Watchpoint and Trace (DWT) unit, bypassing software library overheads.
+* \* \*Hardware Profiling:\* Dump execution time is strictly measured at the cycle-clock level using the Cortex-M Data Watchpoint and Trace (DWT) unit, bypassing software library overheads.
 
 
 
